@@ -20,27 +20,45 @@ func main() {
 	var port int
 	var etcdHost string
 	var host string
+	var apiPath string
 
 	flag.IntVar(&port, "port", 1080, "Port to run the proxy on")
 	flag.StringVar(&etcdHost, "etcd", "http://127.0.0.1:4001", "Url to the etcd API")
+	flag.StringVar(&apiPath, "etcdPath", "api", "The path to the node containing the api entries")
 	flag.StringVar(&host, "baseHost", fmt.Sprintf("api.dev:%v", port), "Base host for API calls")
 
 	flag.Parse()
 
 	etcdClient := etcd.NewClient([]string{etcdHost})
-	apiInfo, err := etcdClient.Get("api", false, true)
+	apiInfo, err := etcdClient.Get(apiPath, false, true)
+
+	if err != nil {
+		log.Fatalf("Failed to fetch api info from '%v': %v", apiPath, err)
+	}
 
 	// Start a watch for changes
 	changes := make(chan *etcd.Response)
 	endWatch := make(chan bool)
 	go func() {
-		etcdClient.Watch("api", 0, true, changes, endWatch)
+		etcdClient.Watch(apiPath, 0, true, changes, endWatch)
 	}()
 
 	applications := applicationMap{}
 
+	if !apiInfo.Node.Dir {
+		log.Fatalf("The api node '%v' in etcd is not a directory", apiPath)
+	}
+
 	for _, appDir := range apiInfo.Node.Nodes {
+		if !appDir.Dir {
+			log.Fatalf("The application node '%v' in etcd is not a directory", appDir.Key)
+		}
+
 		for _, appVersion := range appDir.Nodes {
+			if !appDir.Dir {
+				log.Fatalf("The application version node '%v' in etcd is not a directory", appDir.Key)
+			}
+
 			instances := newWorkerList()
 			domain := keyToDomain(appVersion.Key, host)
 			applications[domain] = instances
@@ -84,10 +102,6 @@ func main() {
 			}
 		}
 	}()
-
-	if err != nil {
-		log.Fatalf("Failed to get worker listing from etcd: %v", err)
-	}
 
 	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 
