@@ -25,6 +25,8 @@ func main() {
 	flag.StringVar(&etcdHost, "etcd", "http://127.0.0.1:4001", "Url to the etcd API")
 	flag.StringVar(&host, "baseHost", fmt.Sprintf("api.dev:%v", port), "Base host for API calls")
 
+	flag.Parse()
+
 	etcdClient := etcd.NewClient([]string{etcdHost})
 	apiInfo, err := etcdClient.Get("api", false, true)
 
