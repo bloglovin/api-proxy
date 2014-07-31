@@ -82,6 +82,10 @@ func main() {
 	go func() {
 		for {
 			change := <-changes
+			if change.Node.Dir {
+				continue
+			}
+
 			domain := keyToDomain(change.Node.Key, host)
 			instances := applications[domain]
 
