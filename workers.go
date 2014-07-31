@@ -4,7 +4,6 @@ import (
 	"container/list"
 	"encoding/json"
 	"log"
-	"net/http"
 	"net/http/httputil"
 	"net/url"
 )
@@ -141,12 +140,4 @@ func (workers *applicationWorkers) next() *workerInstance {
 		return instance
 	}
 	return nil
-}
-
-func (workers *applicationWorkers) Handle(w http.ResponseWriter, r *http.Request) {
-	if workers.current != nil {
-		instance := workers.current.Value.(*workerInstance)
-		instance.Proxy.ServeHTTP(w, r)
-	}
-
 }

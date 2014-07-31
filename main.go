@@ -3,10 +3,11 @@ package main
 import (
 	"flag"
 	"fmt"
-	"github.com/coreos/go-etcd/etcd"
 	"log"
 	"net/http"
 	"strings"
+
+	"github.com/coreos/go-etcd/etcd"
 )
 
 type applicationMap map[string]*applicationWorkers
@@ -91,6 +92,7 @@ func main() {
 
 			if change.Action == "delete" || change.Action == "expire" {
 				instances.Remove(change.Node.Key)
+				log.Printf("Removed application %v", change.Node.Key)
 			} else if change.Action == "create" {
 				instance, err := newWorkerInstance(change.Node.Key, change.Node.Value)
 
@@ -98,13 +100,13 @@ func main() {
 					log.Printf("Failed to register application %v", change.Node.Key)
 				} else {
 					instances.Add(instance)
+					log.Printf("Added application %v", change.Node.Key)
 				}
 			}
 		}
 	}()
 
 	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-
 		workers := applications[r.Host]
 		if workers == nil {
 			http.Error(w, "The API is unavailable", http.StatusBadGateway)
@@ -119,6 +121,7 @@ func main() {
 
 		instance.Proxy.ServeHTTP(w, r)
 	})
+
 	serverErr := http.ListenAndServe(fmt.Sprintf(":%v", port), nil)
 	if serverErr != nil {
 		log.Fatalf("Failed start server: %v", serverErr)
