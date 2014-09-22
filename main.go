@@ -12,9 +12,9 @@ import (
 
 type applicationMap map[string]*applicationWorkers
 
-func keyToDomain(key string, baseHost string) string {
+func keyToDomain(key string, separator string, baseHost string) string {
 	segments := strings.Split(key, "/")
-	return fmt.Sprintf("%v.%v.%v", segments[3], segments[2], baseHost)
+	return strings.Join([]string{segments[3], segments[2], baseHost}, separator)
 }
 
 func main() {
@@ -22,11 +22,13 @@ func main() {
 	var etcdHost string
 	var host string
 	var apiPath string
+	var separator string
 
 	flag.IntVar(&port, "port", 1080, "Port to run the proxy on")
 	flag.StringVar(&etcdHost, "etcd", "http://127.0.0.1:4001", "Url to the etcd API")
 	flag.StringVar(&apiPath, "etcdPath", "api", "The path to the node containing the api entries")
 	flag.StringVar(&host, "baseHost", fmt.Sprintf("api.dev:%v", port), "Base host for API calls")
+	flag.StringVar(&separator, "hostSeparator", "-", "Separator to use when constructing host names")
 
 	flag.Parse()
 
@@ -61,7 +63,7 @@ func main() {
 			}
 
 			instances := newWorkerList()
-			domain := keyToDomain(appVersion.Key, host)
+			domain := keyToDomain(appVersion.Key, separator, host)
 			applications[domain] = instances
 
 			for _, appInstance := range appVersion.Nodes {
@@ -82,11 +84,11 @@ func main() {
 	go func() {
 		for {
 			change := <-changes
-			if change.Node.Dir {
+			if change.Node == nil || change.Node.Dir {
 				continue
 			}
 
-			domain := keyToDomain(change.Node.Key, host)
+			domain := keyToDomain(change.Node.Key, separator, host)
 			instances := applications[domain]
 
 			if instances == nil {
