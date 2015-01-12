@@ -6,11 +6,20 @@ import (
 	"log"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/coreos/go-etcd/etcd"
 )
 
 type applicationMap map[string]*applicationWorkers
+
+type appConfig struct {
+	Port      int
+	EtcdHost  string
+	Host      string
+	APIPath   string
+	Separator string
+}
 
 func keyToDomain(key string, separator string, baseHost string) string {
 	segments := strings.Split(key, "/")
@@ -18,38 +27,38 @@ func keyToDomain(key string, separator string, baseHost string) string {
 }
 
 func main() {
-	var port int
-	var etcdHost string
-	var host string
-	var apiPath string
-	var separator string
+	var config appConfig
 
-	flag.IntVar(&port, "port", 1080, "Port to run the proxy on")
-	flag.StringVar(&etcdHost, "etcd", "http://127.0.0.1:4001", "Url to the etcd API")
-	flag.StringVar(&apiPath, "etcdPath", "api", "The path to the node containing the api entries")
-	flag.StringVar(&host, "baseHost", fmt.Sprintf("api.dev:%v", port), "Base host for API calls")
-	flag.StringVar(&separator, "hostSeparator", "-", "Separator to use when constructing host names")
+	flag.IntVar(&config.Port, "port", 1080, "Port to run the proxy on")
+	flag.StringVar(&config.EtcdHost, "etcd", "http://127.0.0.1:4001", "Url to the etcd API")
+	flag.StringVar(&config.APIPath, "etcdPath", "api", "The path to the node containing the api entries")
+	flag.StringVar(&config.Host, "baseHost", fmt.Sprintf("api.dev:%v", config.Port), "Base host for API calls")
+	flag.StringVar(&config.Separator, "hostSeparator", "-", "Separator to use when constructing host names")
 
 	flag.Parse()
 
-	etcdClient := etcd.NewClient([]string{etcdHost})
-	apiInfo, err := etcdClient.Get(apiPath, false, true)
+	etcdClient := etcd.NewClient([]string{config.EtcdHost})
+	apiInfo, err := etcdClient.Get(config.APIPath, false, true)
 
 	if err != nil {
-		log.Fatalf("Failed to fetch api info from '%v': %v", apiPath, err)
+		log.Fatalf("Failed to fetch api info from '%v': %v", config.APIPath, err)
 	}
-
-	// Start a watch for changes
-	changes := make(chan *etcd.Response)
-	endWatch := make(chan bool)
-	go func() {
-		etcdClient.Watch(apiPath, 0, true, changes, endWatch)
-	}()
-
 	applications := applicationMap{}
 
+	go func() {
+		for {
+			err := watch(etcdClient, &applications, config)
+			if err != nil {
+				log.Printf("Connection error: %v", err)
+				log.Printf("Attempting recovery in %d seconds", 5)
+				time.Sleep(time.Second * 5)
+				log.Print("Connecting to etcd")
+			}
+		}
+	}()
+
 	if !apiInfo.Node.Dir {
-		log.Fatalf("The api node '%v' in etcd is not a directory", apiPath)
+		log.Fatalf("The api node '%v' in etcd is not a directory", config.APIPath)
 	}
 
 	for _, appDir := range apiInfo.Node.Nodes {
@@ -63,7 +72,7 @@ func main() {
 			}
 
 			instances := newWorkerList()
-			domain := keyToDomain(appVersion.Key, separator, host)
+			domain := keyToDomain(appVersion.Key, config.Separator, config.Host)
 			applications[domain] = instances
 
 			for _, appInstance := range appVersion.Nodes {
@@ -80,20 +89,52 @@ func main() {
 		}
 	}
 
+	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		workers := applications[r.Host]
+		if workers == nil {
+			http.Error(w, "The API is unavailable", http.StatusBadGateway)
+			return
+		}
+
+		instance := workers.Next()
+		if instance == nil {
+			http.Error(w, "The API is unavailable", http.StatusBadGateway)
+			return
+		}
+
+		instance.Proxy.ServeHTTP(w, r)
+	})
+
+	serverErr := http.ListenAndServe(fmt.Sprintf(":%v", config.Port), nil)
+	if serverErr != nil {
+		log.Fatalf("Failed start server: %v", serverErr)
+	}
+}
+
+func watch(etcdClient *etcd.Client, applications *applicationMap, config appConfig) error {
+	// Start a watch for changes
+	changes := make(chan *etcd.Response)
+	endWatch := make(chan bool)
+
 	// React to changes
 	go func() {
 		for {
 			change := <-changes
-			if change.Node == nil || change.Node.Dir {
+
+			if change == nil {
+				return
+			}
+
+			if change.Node.Dir {
 				continue
 			}
 
-			domain := keyToDomain(change.Node.Key, separator, host)
-			instances := applications[domain]
+			domain := keyToDomain(change.Node.Key, config.Separator, config.Host)
+			instances := (*applications)[domain]
 
 			if instances == nil {
 				instances = newWorkerList()
-				applications[domain] = instances
+				(*applications)[domain] = instances
 			}
 
 			if change.Action == "delete" || change.Action == "expire" {
@@ -112,24 +153,6 @@ func main() {
 		}
 	}()
 
-	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		workers := applications[r.Host]
-		if workers == nil {
-			http.Error(w, "The API is unavailable", http.StatusBadGateway)
-			return
-		}
-
-		instance := workers.Next()
-		if instance == nil {
-			http.Error(w, "The API is unavailable", http.StatusBadGateway)
-			return
-		}
-
-		instance.Proxy.ServeHTTP(w, r)
-	})
-
-	serverErr := http.ListenAndServe(fmt.Sprintf(":%v", port), nil)
-	if serverErr != nil {
-		log.Fatalf("Failed start server: %v", serverErr)
-	}
+	_, err := etcdClient.Watch(config.APIPath, 0, true, changes, endWatch)
+	return err
 }
