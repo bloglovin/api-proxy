@@ -1,0 +1,10 @@
+{
+  "name": "api-proxy",
+  "private": true,
+  "version": "1.0.1",
+  "homepage": "https://github.com/bloglovin/api-proxy",
+  "repository": {
+    "type": "git",
+    "url": "git://github.com/bloglovin/api-proxy.git"
+  }
+}
